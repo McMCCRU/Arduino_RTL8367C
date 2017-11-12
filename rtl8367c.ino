@@ -465,17 +465,19 @@ struct EEPROMClass_EMU {
 static EEPROMClass_EMU EEPROM_EMU;
 
 #ifndef USE_I2C_EEPROM
+#define TYPE_EEPROM				"_EMU"
 #define EEPROM_update(a, b)			EEPROM.update(a, b)
 #define EEPROM_read(a)				EEPROM.read(a)
 #define EEPROM_write(a, b)			EEPROM.write(a, b)
 #else
+#define TYPE_EEPROM				"_I2C"
 #define EEPROM_update(a, b)			EEPROM_EMU.update(a, b)
 #define EEPROM_read(a)				EEPROM_EMU.read(a)
 #define EEPROM_write(a, b)			EEPROM_EMU.write(a, b)
 #endif
 #define EEPROM_get(a, b)			EEPROM_EMU.get(a, b)
 #define EEPROM_put(a, b)			EEPROM_EMU.put(a, b)
-#define BOARD					"_STM32"
+#define BOARD					"_STM32" TYPE_EEPROM
 
 #else /* if AVR Arduino */
 
