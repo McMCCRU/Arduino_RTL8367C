@@ -44,6 +44,13 @@
  * Pin SDA - PB10 (to EEPROM pin 5 on switch board)
  * Pin SCK - PB11 (to EEPROM pin 6 on switch board)
  *
+ * NEW! Added support write configuration on external I2C EEPROM 24cXX.
+ * !!!!!!!!!!Uncomment USE_I2C_EEPROM for using!!!!!!!!!!!!!!
+ * Pin 5 SDA EEPROM connect to PB7 STM32 board (between pullup resitor 4.7-6.8K)
+ * Pin 6 SCK EEPROM connect to PB6 STM32 board (between pullup resitor 4.7-6.8K)
+ * Pin 1-4 and 7 EEPROM connect to G STM32 board
+ * Pin 8 EEPROM connect to 3.3 STM32 board
+ *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public License
  * as published by the Free Software Foundation; either version 2.1
@@ -309,12 +316,55 @@ vlan_mbrCfgType_t vlan_mbrCfgUsage[RTL8367C_CVIDXNO];
 /* End RTK API */
 
 #if !defined(__AVR__) /* if STM32 Arduino */
-
+/*
+#define USE_I2C_EEPROM				1
+*/
 #define PIN_SDA					PB10
 #define PIN_SCK					PB11
 
 #include <inttypes.h>
+#ifndef USE_I2C_EEPROM
 #include <EEPROM.h>
+#else
+#include <Wire.h>
+
+/* Set I2C1, 400KHz, PB7 - SDA1, PB6 - SCL1 */
+HardWire HWire(1, I2C_FAST_MODE);
+const byte DEVADDR = 0x50;
+
+char i2c_eeprom_read_byte(unsigned eeaddr)
+{
+	byte rdata = -1;
+
+	/* Three lsb of Device address byte are bits 8-10 of eeaddress */
+	byte devaddr = DEVADDR | ((eeaddr >> 8) & 0x07);
+	byte addr    = eeaddr;
+
+	HWire.beginTransmission(devaddr);
+	HWire.write(int(addr));
+	HWire.endTransmission();
+	HWire.requestFrom(int(devaddr), 1);
+	if (HWire.available()) {
+		rdata = HWire.read();
+	}
+	return rdata;
+}
+
+int i2c_eeprom_write_byte(unsigned eeaddr, uint8_t data)
+{
+	/* Three lsb of Device address byte are bits 8-10 of eeaddress */
+	byte devaddr = DEVADDR | ((eeaddr >> 8) & 0x07);
+	byte addr    = eeaddr;
+
+	HWire.beginTransmission(devaddr);
+	HWire.write(int(addr));
+	HWire.write(char(data));
+	HWire.endTransmission();
+	delay(10);
+
+	return 0;
+}
+#endif
 
 struct EERef {
 
@@ -322,12 +372,20 @@ struct EERef {
 			: index( index )	{}
 
 	/* Access/read members. */
+#ifndef USE_I2C_EEPROM
 	uint8_t operator*() const		{ return EEPROM.read( (uint16_t) index ); }
+#else
+	uint8_t operator*() const		{ return i2c_eeprom_read_byte( (unsigned) index ); }
+#endif
 	operator const uint8_t() const		{ return **this; }
 
 	/* Assignment/write members. */
 	EERef &operator=( const EERef &ref )	{ return *this = *ref; }
+#ifndef USE_I2C_EEPROM
 	EERef &operator=( uint8_t in )		{ return EEPROM.write( (uint16_t) index, in ), *this;  }
+#else
+	EERef &operator=( uint8_t in )		{ return i2c_eeprom_write_byte( (unsigned) index, in ), *this;  }
+#endif
 	EERef &operator +=( uint8_t in )	{ return *this = **this + in; }
 	EERef &operator -=( uint8_t in )	{ return *this = **this - in; }
 	EERef &operator *=( uint8_t in )	{ return *this = **this * in; }
@@ -406,6 +464,15 @@ struct EEPROMClass_EMU {
 
 static EEPROMClass_EMU EEPROM_EMU;
 
+#ifndef USE_I2C_EEPROM
+#define EEPROM_update(a, b)			EEPROM.update(a, b)
+#define EEPROM_read(a)				EEPROM.read(a)
+#define EEPROM_write(a, b)			EEPROM.write(a, b)
+#else
+#define EEPROM_update(a, b)			EEPROM_EMU.update(a, b)
+#define EEPROM_read(a)				EEPROM_EMU.read(a)
+#define EEPROM_write(a, b)			EEPROM_EMU.write(a, b)
+#endif
 #define EEPROM_get(a, b)			EEPROM_EMU.get(a, b)
 #define EEPROM_put(a, b)			EEPROM_EMU.put(a, b)
 #define BOARD					"_STM32"
@@ -416,13 +483,16 @@ static EEPROMClass_EMU EEPROM_EMU;
 
 #define PIN_SDA					6
 #define PIN_SCK					5
+#define EEPROM_update(a, b)			EEPROM.update(a, b)
+#define EEPROM_read(a)				EEPROM.read(a)
+#define EEPROM_write(a, b)			EEPROM.write(a, b)
 #define EEPROM_get(a, b)			EEPROM.get(a, b)
 #define EEPROM_put(a, b)			EEPROM.put(a, b)
 #define BOARD					"_AVR"
 
 #endif /* End support board */
 
-#define VERFW					"v.1.0.02_RTL8367C"
+#define VERFW					"v.1.0.03_RTL8367C"
 #define MAGIC_EEPROM_START			0x8367
 
 #define MAX_VLAN_GROUP				8
@@ -2772,10 +2842,12 @@ int8_t input_prio_set()
 void eeprom_erase()
 {
 #if !defined(__AVR__)
+#ifndef USE_I2C_EEPROM
 	EEPROM.format();
 #endif
+#endif
 	for (int i = 0; i < CFG_SIZE /* EEPROM.length() */; i++) { /* 5 + 32(4 * 8 VID) = 37 */
-		EEPROM.write(i, 0);
+		EEPROM_write(i, 0);
 	}
 }
 
@@ -2806,21 +2878,21 @@ int check_magic(int write)
 
 int check_idx(int write)
 {
-	int idx = EEPROM.read(2);
+	int idx = EEPROM_read(2);
 	if(write >= 0) {
 		idx |= 1 << write;
-		EEPROM.update(2, (unsigned char)idx);
+		EEPROM_update(2, (unsigned char)idx);
 	}
 	return idx;
 }
 
 void del_idx(int num)
 {
-	int addr = 5, idx = EEPROM.read(2);
+	int addr = 5, idx = EEPROM_read(2);
 	eeprom_vlan_record vlan;
 
 	idx &= ~(1 << num);
-	EEPROM.update(2, (unsigned char)idx);
+	EEPROM_update(2, (unsigned char)idx);
 	vlan.vid = 0;
 	vlan.ports_mask = 0;
 	addr += sizeof(eeprom_vlan_record) * num;
@@ -2840,8 +2912,8 @@ void load_configuration()
 	if((idx = check_idx(-1)) == 0)
 		return;
 
-	u_ports_mask = EEPROM.read(3);
-	t_ports_mask = EEPROM.read(4);
+	u_ports_mask = EEPROM_read(3);
+	t_ports_mask = EEPROM_read(4);
 
 	if(!u_ports_mask && !t_ports_mask)
 		return;
@@ -2925,7 +2997,7 @@ void show_configuration()
 	Serial.println(F("       [ Ports Groups ]"));
 	/* UnTagged ports */
 	Serial.print(F("UnTagged ports: "));
-	ports_mask = EEPROM.read(3);
+	ports_mask = EEPROM_read(3);
 	for (i = 0; i < MAX_PORTS; i++) {
 		if((ports_mask & (1 << i)) != 0) {
 			Serial.print(PORT_INV(i) + 1, DEC);
@@ -2936,7 +3008,7 @@ void show_configuration()
 
 	/* Tagged ports */
 	Serial.print(F("Tagged ports:   "));
-	ports_mask = EEPROM.read(4);
+	ports_mask = EEPROM_read(4);
 	for (i = 0; i < MAX_PORTS; i++) {
 		if((ports_mask & (1 << i)) != 0) {
 			Serial.print(PORT_INV(i) + 1, DEC);
@@ -2979,11 +3051,16 @@ void setup()
 {
 	Serial.begin(115200);
 #if !defined(__AVR__) /* flash 128Kbyte, if 64Kbyte use 0x800Fxxx */
+#ifndef USE_I2C_EEPROM
 	EEPROM.PageBase0 = 0x801F000;
 	EEPROM.PageBase1 = 0x801F800;
 	EEPROM.PageSize  = 0x400; /* set EEPROM Emulation size 1024 byte, if need 2048 = 0x800 */
 	EEPROM.init();
 	delay(1000);
+#else
+	HWire.begin();
+	delay(50);
+#endif
 #else
 	delay(50);
 #endif
@@ -3043,7 +3120,7 @@ void loop()
 				{
 					Serial.println(F("\nTagged ports group set (y/n):"));
 					mask = input_ports_mask();
-					EEPROM.update(4, (unsigned char)mask);
+					EEPROM_update(4, (unsigned char)mask);
 					check_magic(1);
 					Serial.println(F("Save configuration OK!"));
 					break;
@@ -3052,7 +3129,7 @@ void loop()
 				{
 					Serial.println(F("\nUnTagged ports group set (y/n):"));
 					mask = input_ports_mask();
-					EEPROM.update(3, (unsigned char)mask);
+					EEPROM_update(3, (unsigned char)mask);
 					check_magic(1);
 					Serial.println(F("Save configuration OK!"));
 					break;
@@ -3065,7 +3142,7 @@ void loop()
 						Serial.println(F("\nTable VLAN ID and ports group is FULL!"));
 						break;
 					}
-					if(!EEPROM.read(3) && !EEPROM.read(4)) {
+					if(!EEPROM_read(3) && !EEPROM_read(4)) {
 						Serial.println(F("\nPlease first set masks Tagged or UnTagged ports group!"));
 						break;
 					}
